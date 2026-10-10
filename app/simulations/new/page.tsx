@@ -21,6 +21,15 @@ import {
 
 import "@xyflow/react/dist/style.css";
 
+
+import {
+  prepareSimulationConfig,
+  checkSimulationReadiness,
+  runSimulation,
+  type SimulationResult,
+} from "@/src/lib/simulation/engine";
+
+
 type NodeType =
   | "warehouse"
   | "order-source"
@@ -101,6 +110,12 @@ export default function NewSimulation() {
   const [edges, setEdges, onEdgesChange] = useEdgesState<Edge>([]);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [message, setMessage] = useState("");
+  const [simulationResult, setSimulationResult] =
+    useState<SimulationResult | null>(null);
+
+  const [durationMinutes, setDurationMinutes] = useState(60);
+
+
 
   const onConnect: OnConnect = useCallback(
     (connection: Connection) => {
@@ -139,6 +154,239 @@ export default function NewSimulation() {
     },
     [edges, setEdges]
   );
+
+
+  const autoConnect = () => {
+    const requiredTypes: {
+      type: NodeType;
+      label: string;
+    }[] = [
+      { type: "order-source", label: "Order Source" },
+      { type: "warehouse", label: "Warehouse" },
+      { type: "vehicle-pool", label: "Vehicle Pool" },
+      { type: "customer", label: "Customer" },
+    ];
+
+    
+
+    const selectedNodes = requiredTypes.map((required) => {
+      const matches = nodes.filter(
+        (node) => node.data.nodeType === required.type
+      );
+
+      return {
+        ...required,
+        node: matches.length === 1 ? matches[0] : undefined,
+        count: matches.length,
+      };
+    });
+
+
+  
+const autoLayout = () => {
+  const spacingX = 250;
+  const spacingY = 180;
+  const startX = 100;
+  const startY = 100;
+
+  const order = [
+    "order-source",
+    "warehouse",
+    "vehicle-pool",
+    "customer",
+  ];
+
+  const coreNodes = order
+    .map((type) =>
+      nodes.find((node) => node.data.nodeType === type)
+    )
+    .filter((node) => node !== undefined);
+
+  if (coreNodes.length !== 4) {
+    setMessage(
+      "Add Order Source, Warehouse, Vehicle Pool and Customer before auto-layout."
+    );
+    return;
+  }
+
+  const coreIds = new Set(coreNodes.map((node) => node.id));
+
+  setNodes((current) =>
+    current.map((node) => {
+      const index = coreNodes.findIndex(
+        (item) => item.id === node.id
+      );
+
+      if (index !== -1) {
+        return {
+          ...node,
+          position: {
+            x: startX + index * spacingX,
+            y: startY,
+          },
+        };
+      }
+
+      if (node.data.nodeType === "queue") {
+        return {
+          ...node,
+          position: {
+            x: startX + spacingX,
+            y: startY + spacingY,
+          },
+        };
+      }
+
+      return node;
+    })
+  );
+
+  setMessage(
+    "Auto-layout complete. Core workflow arranged from left to right."
+  );
+};
+
+
+    const invalidNodes = selectedNodes.filter(
+      (item) => item.count !== 1
+    );
+
+    if (invalidNodes.length > 0) {
+      setMessage(
+        `Add exactly one of each required component: ${invalidNodes
+          .map((item) => item.label)
+          .join(", ")}.`
+      );
+      return;
+    }
+
+    const workflowNodes = selectedNodes.map(
+      (item) => item.node!
+    );
+
+    const connections = workflowNodes.slice(0, -1).map(
+      (node, index) => ({
+        source: node.id,
+        target: workflowNodes[index + 1].id,
+      })
+    );
+
+    const existing = new Set(
+      edges.map((edge) => `${edge.source}->${edge.target}`)
+    );
+
+    const missing = connections.filter(
+      (connection) =>
+        !existing.has(
+          `${connection.source}->${connection.target}`
+        )
+    );
+
+    if (missing.length === 0) {
+      setMessage("All workflow connections already exist.");
+      return;
+    }
+
+    setEdges((current) => [
+      ...current,
+      ...missing.map((connection) => ({
+        ...connection,
+        id: crypto.randomUUID(),
+        type: "smoothstep" as const,
+        animated: true,
+        style: { stroke: "#60a5fa", strokeWidth: 2 },
+      })),
+    ]);
+
+    setMessage(
+      `Auto-connected workflow: ${missing.length} connection(s) added.`
+    );
+  };
+
+
+const autoLayout = () => {
+  const order = [
+    "order-source",
+    "warehouse",
+    "vehicle-pool",
+    "customer",
+  ];
+
+  const coreNodes = order.map((type) =>
+    nodes.find((node) => node.data.nodeType === type)
+  );
+
+  if (coreNodes.some((node) => !node)) {
+    setMessage(
+      "Add Order Source, Warehouse, Vehicle Pool and Customer first."
+    );
+    return;
+  }
+
+  setNodes((current) =>
+    current.map((node) => {
+      const index = coreNodes.findIndex(
+        (item) => item?.id === node.id
+      );
+
+      if (index !== -1) {
+        return {
+          ...node,
+          position: {
+            x: 100 + index * 250,
+            y: 100,
+          },
+        };
+      }
+
+      if (node.data.nodeType === "queue") {
+        return {
+          ...node,
+          position: { x: 350, y: 280 },
+        };
+      }
+
+      return node;
+    })
+  );
+
+  setMessage("Auto-layout complete!");
+};
+
+
+const handleRunSimulation = () => {
+  setSimulationResult(null);
+
+  try {
+    const config = prepareSimulationConfig(
+      nodes,
+      edges,
+      durationMinutes
+    );
+
+    const readiness = checkSimulationReadiness(config);
+
+    if (!readiness.ready) {
+      setMessage(
+        `Cannot run simulation: ${readiness.errors.join(" ")}`
+      );
+      return;
+    }
+
+    const result = runSimulation(config);
+    setSimulationResult(result);
+
+    setMessage(
+      result.success
+        ? "Simulation completed successfully."
+        : `Simulation failed: ${result.errors.join(" ")}`
+    );
+  } catch (error) {
+    console.error(error);
+    setMessage("Unexpected error while running simulation.");
+  }
+};
+
 
   const addNode = (type: NodeType) => {
     const component = componentTypes.find((item) => item.type === type);
@@ -305,6 +553,31 @@ export default function NewSimulation() {
           >
             Load Model
           </button>
+                
+            
+<button
+  onClick={autoConnect}
+  className="rounded-lg border border-purple-500/50 bg-purple-500/10 px-4 py-2 text-sm text-purple-300 hover:bg-purple-500/20"
+>
+  Auto-Connect
+</button>
+
+
+<button
+  onClick={autoLayout}
+  className="rounded-lg border border-emerald-500/50 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-300 hover:bg-emerald-500/20"
+>
+  Auto-Layout
+</button>
+
+
+<button
+  onClick={handleRunSimulation}
+  className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium hover:bg-emerald-500"
+>
+  Run Simulation
+</button>
+
 
           <button
             onClick={saveModel}
@@ -347,6 +620,27 @@ export default function NewSimulation() {
             </span>
           </div>
 
+          
+<div className="mb-3 flex items-center gap-3">
+  <label htmlFor="simulation-duration" className="text-sm text-slate-300">
+    Duration (minutes)
+  </label>
+
+  <input
+    id="simulation-duration"
+    type="number"
+    min={1}
+    value={durationMinutes}
+    onChange={(event) =>
+      setDurationMinutes(
+        Math.max(1, Number(event.target.value) || 1)
+      )
+    }
+    className="w-28 rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm"
+  />
+</div>
+
+
           <div className="h-[600px] overflow-hidden rounded-xl border border-slate-800 bg-slate-900 sm:h-[700px]">
             <ReactFlow
               nodes={nodes}
@@ -379,6 +673,49 @@ export default function NewSimulation() {
               {message}
             </p>
           )}
+
+          
+{simulationResult && (
+  <div className="mt-5 rounded-xl border border-slate-800 bg-slate-900 p-5">
+    <h3 className="text-lg font-semibold">Simulation Results</h3>
+
+    {simulationResult.success ? (
+      <>
+        <p className="mt-1 text-sm text-emerald-300">
+          Completed · {simulationResult.durationMinutes} minutes
+        </p>
+
+        <div className="mt-4 grid grid-cols-2 gap-3 xl:grid-cols-3">
+          {[
+            ["Total Orders", simulationResult.metrics.totalOrders],
+            ["Completed Deliveries", simulationResult.metrics.completedDeliveries],
+            ["Average Waiting", `${simulationResult.metrics.averageWaitingTimeMinutes.toFixed(2)} min`],
+            ["Maximum Queue", simulationResult.metrics.maxQueueLength],
+            ["Vehicle Utilization", `${simulationResult.metrics.vehicleUtilizationPercent.toFixed(1)}%`],
+          ].map(([label, value]) => (
+            <div key={label} className="rounded-lg border border-slate-800 p-3">
+              <p className="text-xs text-slate-400">{label}</p>
+              <p className="mt-1 text-xl font-semibold">{value}</p>
+            </div>
+          ))}
+        </div>
+      </>
+    ) : (
+      <p className="mt-2 text-sm text-red-300">
+        {simulationResult.errors.join(" ")}
+      </p>
+    )}
+
+    {simulationResult.warnings.length > 0 && (
+      <ul className="mt-4 list-disc space-y-1 pl-5 text-sm text-amber-300">
+        {simulationResult.warnings.map((warning) => (
+          <li key={warning}>{warning}</li>
+        ))}
+      </ul>
+    )}
+  </div>
+)}
+
 
           <p className="mt-2 text-xs text-slate-500">
             Drag from a node's right handle to another node's left
